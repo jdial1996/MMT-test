@@ -1,0 +1,132 @@
+# Docker
+# Build a Docker image
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+  branches:
+    include:
+    - master
+    - task2
+
+
+resources:
+- repo: self  # This means refer to the repo that the yaml file is in. 
+
+variables:
+  tag: '$(Build.SourceBranch):$(Build.BuildId)'
+  isMaster: $[eq(variables['Build.SourceBranch'], 'refs/heads/master')]
+  isTask2: $[eq(variables['Build.SourceBranch'], 'refs/heads/task2')]
+  deployEnv: 'dev' 
+  notification_channel: 'jdial1996@yahoo.co.uk'
+
+stages:
+- stage: Build  # stages = collections of related jobs 
+  displayName: Build image # display name of stage in console? 
+  jobs:   # jobs make up the work of the state 
+  - job: Build
+    displayName: Build
+    # pool:  # this is where jobs in the pipeline will run unless otherwise specified 
+    #   vmImage: ubuntu-20.04
+    pool:  # this is where jobs in the pipeline will run unless otherwise specified 
+      name: Default
+      demands: 
+      - agent.os -equals Darwin 
+    steps:
+    - task: Docker@2
+      displayName: Build an image
+      inputs:
+        command: build
+        dockerfile: '$(Build.SourcesDirectory)/systems-fast-track-tech-test-main/cars-unlimited/Dockerfile'
+        tags: |
+          '$(tag)'
+  
+
+
+# Deploy into the dev environment first always without fail. 
+# For QA and prod make sure deployEnv variable is set to qa and dev respestively 
+
+############################### DEV DEPLOY ####################################
+- stage: deployDev
+  dependsOn: Build
+  condition: eq(variables.isTask2, 'true')
+  jobs:
+  - deployment: DeployDev1
+    displayName: Deploy to Dev
+    pool:  # this is where jobs in the pipeline will run unless otherwise specified 
+      name: Default
+      demands: 
+      - agent.os -equals Darwin   
+    # creates an environment if it doesn't exist
+    environment: 'Dev'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo pulling Docker image and deploying  to Dev environment
+  - job: waitForValidation 
+    dependsOn: DeployDev1
+    displayName: Wait for external validation
+    pool: server 
+    timeoutInMinutes: 30 # job times out in 30 minutes
+    steps:
+    - task: ManualValidation@0
+      timeoutInMinutes: 30 # task times out in 30 minutes
+      inputs:
+        notifyUsers: |
+          variables.notification_channel
+        instructions: 'Please validate you are happy with the Dev Deployment and are happy to proceed to QA'
+        onTimeout: reject          
+
+############################### END DEV DEPLOY ####################################
+############################### QA DEPLOY ####################################
+- stage: deployQA
+  dependsOn: deployDev
+  condition: eq(variables.isTask2, 'true')
+  jobs:
+  - deployment: DeployQA1
+    displayName: Deploy to QA
+    condition: eq(variables.isMaster, 'false')
+    pool:  # this is where jobs in the pipeline will run unless otherwise specified 
+      name: Default
+      demands: 
+      - agent.os -equals Darwin   
+    # creates an environment if it doesn't exist
+    environment: 'QA'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo Pulling Docker image and  deploying to QA environment
+  - job: waitForValidation 
+    dependsOn: DeployQA1
+    displayName: Wait for external validation
+    pool: server 
+    timeoutInMinutes: 30 # job times out in 30 minutes
+    steps:
+    - task: ManualValidation@0
+      timeoutInMinutes: 30 # task times out in 30 minutes
+      inputs:
+        notifyUsers: |
+          variables.notification_channel
+        instructions: 'Please validate you are happy with the QA Deployment and are happy to proceed to Prod'
+        onTimeout: reject          
+
+############################### END QA DEPLOY ####################################
+
+- stage: deployProd
+  dependsOn: deployQA
+  condition: eq('System.PullRequest.TargetBranch', 'refs/heads/master')
+  jobs:
+  - deployment: DeployProd
+    displayName: Deploy to Prod
+    pool:  # this is where jobs in the pipeline will run unless otherwise specified 
+      name: Default
+      demands: 
+      - agent.os -equals Darwin   
+    # creates an environment if it doesn't exist
+    environment: 'Prod'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: echo pulling docker image and deploying to Prod environment
